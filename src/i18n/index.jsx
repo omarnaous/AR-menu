@@ -73,6 +73,8 @@ const en = {
   'action.save': 'Save to menu',
   'action.saved': 'Saved',
   'action.download': 'Download .glb',
+  'action.downloadUsdz': 'Download .usdz',
+  'status.usdz': 'Converting for iOS…',
   'action.viewAr': 'View on your table',
   'action.back': 'Back',
   'action.next': 'Continue',
@@ -86,7 +88,7 @@ const en = {
 
   'ar.title': 'Augmented reality',
   'ar.hint': 'Point the camera at your table, then drag to place the dish.',
-  'ar.ios': 'iPhone and iPad open AR through Quick Look, which needs a USDZ file. This build ships GLB only, so iOS shows the 3D viewer instead of camera AR. See the README for the conversion step.',
+  'ar.ios': 'This dish has no USDZ file, so iPhone and iPad show the 3D viewer instead of camera AR. Serve the page over HTTPS and rebuild the dish to generate one.',
   'ar.unsupported': 'This browser has no AR mode. The dish still rotates and zooms in 3D.',
 
   'menu.title': 'Your AR menu',
@@ -175,6 +177,8 @@ const ar = {
   'action.save': 'احفظ في القائمة',
   'action.saved': 'تم الحفظ',
   'action.download': 'تنزيل ملف glb.',
+  'action.downloadUsdz': 'تنزيل ملف usdz.',
+  'status.usdz': 'جارٍ التحويل للآيفون…',
   'action.viewAr': 'شاهده على طاولتك',
   'action.back': 'رجوع',
   'action.next': 'متابعة',
@@ -188,7 +192,7 @@ const ar = {
 
   'ar.title': 'الواقع المعزز',
   'ar.hint': 'وجّه الكاميرا نحو الطاولة ثم اسحب لوضع الطبق.',
-  'ar.ios': 'يفتح الآيفون والآيباد الواقع المعزز عبر Quick Look الذي يحتاج ملف USDZ. هذا الإصدار يوفّر GLB فقط، لذا يظهر العارض ثلاثي الأبعاد بدل الكاميرا. راجع ملف README لخطوة التحويل.',
+  'ar.ios': 'لا يوجد ملف USDZ لهذا الطبق، لذا يعرض الآيفون والآيباد العارض ثلاثي الأبعاد بدل الكاميرا. افتح الصفحة عبر HTTPS وأعد بناء الطبق لإنشاء الملف.',
   'ar.unsupported': 'هذا المتصفح لا يدعم الواقع المعزز. يمكنك تدوير الطبق وتكبيره ثلاثي الأبعاد.',
 
   'menu.title': 'قائمتك بالواقع المعزز',

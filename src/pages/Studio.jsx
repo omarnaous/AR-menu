@@ -6,7 +6,8 @@ import ModelStage from '../components/ModelStage.jsx'
 import ARView from '../components/ARView.jsx'
 import { fileToImage, imageToImageData, applyMask } from '../lib/imaging.js'
 import { segmentFood, alphaCoverage, DEFAULT_SEGMENT_OPTIONS } from '../lib/segment.js'
-import { buildDishObject, exportGLB, disposeObject, DEFAULT_INFLATE_OPTIONS } from '../lib/inflate.js'
+import { buildDishObject, exportGLB, exportUSDZ, disposeObject, DEFAULT_INFLATE_OPTIONS } from '../lib/inflate.js'
+import { initArDelivery, publishUsdz, unpublishUsdz } from '../lib/ar.js'
 import { createId, saveItem } from '../lib/storage.js'
 import { useI18n, CURRENCIES } from '../i18n/index.jsx'
 
@@ -40,7 +41,11 @@ export default function Studio() {
   const [stats, setStats] = useState(null)
   const [glb, setGlb] = useState(null)
   const [glbUrl, setGlbUrl] = useState(null)
+  const [usdz, setUsdz] = useState(null)
+  const [usdzUrl, setUsdzUrl] = useState(null)
+  const [usdzFileUrl, setUsdzFileUrl] = useState(null)
   const [thumb, setThumb] = useState(null)
+  const previewId = useRef(`preview_${Math.random().toString(36).slice(2, 9)}`)
 
   const [details, setDetails] = useState({
     name: '',
@@ -58,8 +63,16 @@ export default function Studio() {
   const objectRef = useRef(null)
   objectRef.current = object
 
+  useEffect(() => {
+    initArDelivery()
+  }, [])
   useEffect(() => () => disposeObject(objectRef.current), [])
+  useEffect(() => {
+    const id = previewId.current
+    return () => unpublishUsdz(id)
+  }, [])
   useEffect(() => () => glbUrl && URL.revokeObjectURL(glbUrl), [glbUrl])
+  useEffect(() => () => usdzFileUrl && URL.revokeObjectURL(usdzFileUrl), [usdzFileUrl])
 
   const runSegmentation = useCallback(
     async (imageData, options, boundingRect) => {
@@ -128,6 +141,12 @@ export default function Studio() {
           if (previous) URL.revokeObjectURL(previous)
           return null
         })
+        setUsdz(null)
+        setUsdzUrl(null)
+        setUsdzFileUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous)
+          return null
+        })
 
         let triangles = 0
         next.traverse((child) => {
@@ -166,8 +185,11 @@ export default function Studio() {
     setStep('publish')
   }
 
-  const ensureGlb = useCallback(async () => {
-    if (glb || !object) return glb
+  // Android and the web viewer read the GLB; iOS Quick Look reads the USDZ.
+  // Both come out of the same three.js object, so they are built together.
+  const ensureExports = useCallback(async () => {
+    if (!object) return null
+    if (glb) return glb
     setStatus(t('status.exporting'))
     await nextFrame()
     try {
@@ -177,6 +199,26 @@ export default function Studio() {
         if (previous) URL.revokeObjectURL(previous)
         return URL.createObjectURL(blob)
       })
+
+      setStatus(t('status.usdz'))
+      await nextFrame()
+      try {
+        const usdzBlob = await exportUSDZ(object)
+        setUsdz(usdzBlob)
+        setUsdzFileUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous)
+          return URL.createObjectURL(usdzBlob)
+        })
+        setUsdzUrl(await publishUsdz(previewId.current, usdzBlob))
+      } catch {
+        // A failed USDZ only costs iOS camera AR, so the GLB still ships.
+        setUsdz(null)
+        setUsdzUrl(null)
+        setUsdzFileUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous)
+          return null
+        })
+      }
       return blob
     } catch (cause) {
       setError(cause.message || t('error.generic'))
@@ -187,11 +229,11 @@ export default function Studio() {
   }, [glb, object, t])
 
   useEffect(() => {
-    if (step === 'publish') ensureGlb()
-  }, [step, ensureGlb])
+    if (step === 'publish') ensureExports()
+  }, [step, ensureExports])
 
   const save = async () => {
-    const blob = glb || (await ensureGlb())
+    const blob = glb || (await ensureExports())
     if (!blob) return
     setSaving(true)
     try {
@@ -210,7 +252,7 @@ export default function Studio() {
           bytes: blob.size,
           triangles: stats?.triangles ?? null,
         },
-        { glb: blob, thumb },
+        { glb: blob, usdz, thumb },
       )
       navigate(`/item/${id}`)
     } catch (cause) {
@@ -227,6 +269,12 @@ export default function Studio() {
     setAlpha(null)
     setGlb(null)
     setGlbUrl((previous) => {
+      if (previous) URL.revokeObjectURL(previous)
+      return null
+    })
+    setUsdz(null)
+    setUsdzUrl(null)
+    setUsdzFileUrl((previous) => {
       if (previous) URL.revokeObjectURL(previous)
       return null
     })
@@ -461,7 +509,7 @@ export default function Studio() {
         <div className="grid two">
           <div className="stack">
             {glbUrl ? (
-              <ARView src={glbUrl} alt={details.name || t('app.title')} />
+              <ARView src={glbUrl} iosSrc={usdzUrl} alt={details.name || t('app.title')} />
             ) : (
               <div className="stage viewport" style={{ position: 'relative' }}>
                 <div className="busy">
@@ -472,7 +520,9 @@ export default function Studio() {
             )}
             {glb && (
               <p className="tiny muted" style={{ margin: 0 }}>
-                {(glb.size / 1024 / 1024).toFixed(2)} MB · {stats?.triangles?.toLocaleString('en-US')} triangles
+                GLB {(glb.size / 1024 / 1024).toFixed(2)} MB
+                {usdz ? ` · USDZ ${(usdz.size / 1024 / 1024).toFixed(2)} MB` : ''} ·{' '}
+                {stats?.triangles?.toLocaleString('en-US')} triangles
               </p>
             )}
           </div>
@@ -530,8 +580,13 @@ export default function Studio() {
             <div className="row">
               <button className="btn ghost" onClick={() => setStep('model')}>{t('action.back')}</button>
               {glbUrl && (
-                <a className="btn" href={glbUrl} download={`${(details.name || 'dish').replace(/\s+/g, '-').toLowerCase()}.glb`}>
+                <a className="btn" href={glbUrl} download={`${slugify(details.name)}.glb`}>
                   {t('action.download')}
+                </a>
+              )}
+              {usdzFileUrl && (
+                <a className="btn" href={usdzFileUrl} download={`${slugify(details.name)}.usdz`}>
+                  {t('action.downloadUsdz')}
                 </a>
               )}
               <button className="btn primary" onClick={save} disabled={!glb || saving}>
@@ -543,6 +598,10 @@ export default function Studio() {
       )}
     </div>
   )
+}
+
+function slugify(name) {
+  return (name || 'dish').trim().replace(/\s+/g, '-').toLowerCase() || 'dish'
 }
 
 function Slider({ label, min, max, step, value, onChange, format }) {

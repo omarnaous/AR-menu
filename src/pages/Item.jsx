@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import ARView from '../components/ARView.jsx'
 import QRCard from '../components/QRCard.jsx'
 import { getItem, getAsset, deleteItem } from '../lib/storage.js'
+import { publishUsdz, unpublishUsdz } from '../lib/ar.js'
 import { useI18n, formatPrice } from '../i18n/index.jsx'
 
 export default function Item() {
@@ -11,6 +12,7 @@ export default function Item() {
   const navigate = useNavigate()
   const [item, setItem] = useState(null)
   const [src, setSrc] = useState(null)
+  const [iosSrc, setIosSrc] = useState(null)
   const [poster, setPoster] = useState(null)
   const [missing, setMissing] = useState(false)
 
@@ -22,19 +24,28 @@ export default function Item() {
         return
       }
       setItem(row)
-      const [glb, thumb] = await Promise.all([getAsset(id, 'glb'), getAsset(id, 'thumb')])
+      const [glb, usdz, thumb] = await Promise.all([
+        getAsset(id, 'glb'),
+        getAsset(id, 'usdz'),
+        getAsset(id, 'thumb'),
+      ])
       if (glb) {
         const url = URL.createObjectURL(glb)
         urls.push(url)
         setSrc(url)
       }
+      // Quick Look needs a real .usdz URL, which the service worker provides.
+      if (usdz) setIosSrc(await publishUsdz(id, usdz))
       if (thumb) {
         const url = URL.createObjectURL(thumb)
         urls.push(url)
         setPoster(url)
       }
     })
-    return () => urls.forEach(URL.revokeObjectURL)
+    return () => {
+      urls.forEach(URL.revokeObjectURL)
+      unpublishUsdz(id)
+    }
   }, [id])
 
   if (missing) {
@@ -62,7 +73,7 @@ export default function Item() {
 
       <div className="grid two">
         <div className="stack">
-          {src ? <ARView src={src} alt={item.name} poster={poster} /> : <div className="card">…</div>}
+          {src ? <ARView src={src} iosSrc={iosSrc} alt={item.name} poster={poster} /> : <div className="card">…</div>}
           {item.description && <p className="muted" style={{ margin: 0 }}>{item.description}</p>}
         </div>
 

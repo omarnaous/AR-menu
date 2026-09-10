@@ -1,6 +1,6 @@
 # AR Menu Studio
 
-Upload a raw food photo, get an AR-ready 3D dish a guest can place on their table. React, three.js, model-viewer. No API keys, no server, no per-image cost — every step runs in the browser.
+Upload a raw food photo, get an AR-ready 3D dish a guest can place on their table, on Android and on iPhone. React, three.js, model-viewer. No API keys, no server, no per-image cost — every step runs in the browser, including the iOS conversion.
 
 Built with GCC restaurants in mind: bilingual English/Arabic UI with full RTL, GCC currencies, and a printable QR per dish for the paper menu.
 
@@ -16,7 +16,7 @@ npm run preview
 1. **Photo** — the image is decoded and downscaled to 1024 px for the per-pixel passes.
 2. **Cut-out** — background removal in `src/lib/segment.js`.
 3. **3D dish** — inflation in `src/lib/inflate.js`.
-4. **Publish** — GLB export, AR viewer, menu entry, QR code.
+4. **Publish** — GLB and USDZ export, AR viewer, menu entry, QR code.
 
 ## How a flat photo becomes 3D
 
@@ -53,19 +53,35 @@ Give this to whoever holds the phone. It matters more than any slider in the app
 - Shoot straight down. This is the single biggest quality lever.
 - Wipe the rim. Sauce on the plate edge confuses the plate/food split.
 
-## Known limits, stated plainly
+## iOS
 
-**iOS has no camera AR here.** Android goes through WebXR or Scene Viewer with the GLB. iPhone and iPad use Quick Look, which requires a USDZ file, and there is no free browser-side GLB→USDZ converter. iOS visitors get the interactive 3D viewer instead of camera AR. To fix it you need a build step or an endpoint running Apple's `usdzconvert` or Google's `usd_from_gltf`, then set `ios-src` on the `<model-viewer>` element in `src/components/ARView.jsx`. Given that iOS is roughly half of GCC handsets, treat this as the first thing to solve before a real rollout.
+Android reads the GLB through WebXR or Scene Viewer. iPhone and iPad go through AR Quick Look, which reads USDZ and nothing else. Both files come out of the same three.js object, so each dish is exported twice, in the browser, with no backend and no conversion service.
+
+Quick Look is strict about how the file arrives, and a `blob:` URL fails every one of its rules. So a small service worker (`public/ar-sw.js`) serves the USDZ from the Cache API at a real same-origin path, `/ar/<id>.usdz`, answering with `model/vnd.usdz+zip`. That is the whole delivery layer; `src/lib/ar.js` is the app side of it.
+
+What is verified here, in headless Chromium:
+
+- The USDZ is a valid archive: `model.usda` first, every entry stored uncompressed, every file offset 64-byte aligned. Quick Look rejects an archive that misses any of those.
+- The texture is written as PNG, so the alpha that carves the dish silhouette survives, and `alphaTest` maps onto `opacityThreshold`, which is how Quick Look does cut-outs.
+- The service worker answers `/ar/<id>.usdz` with the right bytes and the right content type, both for the studio preview and for a saved dish.
+
+What is not verified here: Quick Look itself. There is no iPhone in this environment. Open a dish over HTTPS on a real device before you trust it in front of a guest.
+
+Two consequences worth knowing. The dish is single-sided, because USDZ has no double-sided flag; the front and back shells both taper to zero at the silhouette, so the object is closed and single-sided rendering matches the preview. And USDZ archives are uncompressed by format, with geometry written as ASCII text, so a USDZ runs about 2.5x its GLB. *Mesh detail* is the only real lever on that; the default of 128 gives roughly 52k triangles, a 1.5 MB GLB and a 3.6 MB USDZ.
+
+## Known limits, stated plainly
 
 **Dishes live in one browser.** `src/lib/storage.js` is IndexedDB. That means the QR codes only resolve on the device that created the menu — fine for building and demoing, useless for guests. The module is deliberately a thin, swappable interface: point `saveItem`, `listItems`, `getItem` and `getAsset` at Supabase, Firebase or your own API and everything above it is unchanged. Until then, *Export menu* writes a JSON file with the models embedded and *Import menu* reads it back on another device.
 
 **Segmentation and inflation run on the main thread.** A 1024 px photo takes a few hundred milliseconds and the UI freezes for that beat. Moving both into a Web Worker is the obvious next step.
 
-**Files are 2–3 MB per dish** at the default mesh detail, dominated by the texture. Lower *Mesh detail*, or run the GLB through `gltf-transform` with Draco and KTX2 before serving it to guests.
+**Files are 1.5 MB of GLB and 3.6 MB of USDZ per dish** at the default mesh detail, dominated by geometry rather than texture. Lower *Mesh detail* to trade, or run the GLB through `gltf-transform` with Draco and KTX2 before serving it to guests. Draco will not help the USDZ, which the format requires to be stored uncompressed.
 
 ## Deploying
 
-Static build, any host. Both files for SPA routing are included: `public/_redirects` for Netlify, `vercel.json` for Vercel. On nginx, rewrite unmatched paths to `/index.html`. WebXR needs HTTPS; localhost is exempt.
+Static build, any host. Both files for SPA routing are included: `public/_redirects` for Netlify, `vercel.json` for Vercel. On nginx, rewrite unmatched paths to `/index.html`.
+
+HTTPS is not optional in production: WebXR, service workers and Quick Look all require a secure context, so on plain HTTP iOS AR degrades to the 3D viewer. Localhost is exempt, which is why the whole flow works in `npm run dev`.
 
 ## Layout
 
@@ -73,11 +89,13 @@ Static build, any host. Both files for SPA routing are included: `public/_redire
 src/
   lib/imaging.js     canvas helpers, sRGB→Lab, separable blur
   lib/segment.js     background removal
-  lib/inflate.js     distance transform, height map, mesh, GLB export
+  lib/inflate.js     distance transform, height map, mesh, GLB and USDZ export
   lib/storage.js     IndexedDB, menu export/import
+  lib/ar.js          service worker registration, USDZ cache delivery
   components/        dropzone, cut-out canvas, three.js preview, AR viewer, QR
   pages/             Studio (the pipeline), Menu, Item
   i18n/              English + Arabic, RTL
+public/ar-sw.js      serves /ar/<id>.usdz so AR Quick Look accepts it
 ```
 
 ## Licences

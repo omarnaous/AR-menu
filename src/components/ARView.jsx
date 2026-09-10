@@ -5,7 +5,7 @@ const isIOS = () =>
   /iPad|iPhone|iPod/.test(navigator.userAgent) ||
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 
-export default function ARView({ src, alt, poster }) {
+export default function ARView({ src, iosSrc, alt, poster }) {
   const { t } = useI18n()
   const [ready, setReady] = useState(false)
 
@@ -35,6 +35,7 @@ export default function ARView({ src, alt, poster }) {
     <div className="stack">
       <model-viewer
         src={src}
+        ios-src={iosSrc || undefined}
         alt={alt}
         poster={poster}
         ar
@@ -55,7 +56,7 @@ export default function ARView({ src, alt, poster }) {
         </button>
       </model-viewer>
       <p className="tiny muted" style={{ margin: 0 }}>{t('ar.hint')}</p>
-      {isIOS() && <div className="note warn">{t('ar.ios')}</div>}
+      {isIOS() && !iosSrc && <div className="note warn">{t('ar.ios')}</div>}
     </div>
   )
 }

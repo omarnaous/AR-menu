@@ -71,6 +71,7 @@ export async function deleteItem(id) {
   await tx(ITEMS, 'readwrite', (store) => store.delete(id))
   await tx(ASSETS, 'readwrite', (store) => {
     store.delete(`${id}:glb`)
+    store.delete(`${id}:usdz`)
     store.delete(`${id}:thumb`)
   })
 }
@@ -81,10 +82,15 @@ export async function exportMenu() {
   const items = await listItems()
   const payload = { version: 1, exportedAt: Date.now(), items: [] }
   for (const item of items) {
-    const [glb, thumb] = await Promise.all([getAsset(item.id, 'glb'), getAsset(item.id, 'thumb')])
+    const [glb, usdz, thumb] = await Promise.all([
+      getAsset(item.id, 'glb'),
+      getAsset(item.id, 'usdz'),
+      getAsset(item.id, 'thumb'),
+    ])
     payload.items.push({
       item,
       glb: glb ? await blobToDataUrl(glb) : null,
+      usdz: usdz ? await blobToDataUrl(usdz) : null,
       thumb: thumb ? await blobToDataUrl(thumb) : null,
     })
   }
@@ -99,6 +105,7 @@ export async function importMenu(file) {
   for (const entry of payload.items) {
     await saveItem(entry.item, {
       glb: entry.glb ? await dataUrlToBlob(entry.glb) : null,
+      usdz: entry.usdz ? await dataUrlToBlob(entry.usdz) : null,
       thumb: entry.thumb ? await dataUrlToBlob(entry.thumb) : null,
     })
   }

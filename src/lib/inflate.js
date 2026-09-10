@@ -10,14 +10,15 @@
 
 import * as THREE from 'three'
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js'
-import { clamp, imageDataToCanvas, luminanceBuffer, blurFloat, toLabBuffer } from './imaging.js'
+import { USDZExporter } from 'three/addons/exporters/USDZExporter.js'
+import { clamp, luminanceBuffer, blurFloat, toLabBuffer } from './imaging.js'
 
 export const DEFAULT_INFLATE_OPTIONS = {
   widthCm: 24, // real-world width of the dish, drives AR scale
   puffiness: 0.3, // mound height as a fraction of the food's own width
   backDepth: 0.18, // how much of that height the underside gets
   relief: 0.35, // how strongly photo shading becomes surface detail
-  gridRes: 180,
+  gridRes: 128,
   tiltDeg: 90, // 90 = shot from above, 45 = three-quarter, 0 = straight on
   detectPlate: true, // keep a plate in the photo flat instead of doming it
   plate: false, // add a separate 3D plate underneath
@@ -47,15 +48,21 @@ export function buildDishObject(cutout, options = {}) {
     backDepth: clamp(opts.backDepth, 0, 1),
   })
 
-  const texture = new THREE.CanvasTexture(imageDataToCanvas(cutout))
+  // Texture only the dish, not the whole frame. The transparent surround costs
+  // almost nothing in a PNG but it is full-price in GPU memory, so cropping to
+  // the bounding box is roughly a 2x saving on the device that has least of it.
+  const texture = new THREE.CanvasTexture(cropToCanvas(cutout, bbox))
   texture.colorSpace = THREE.SRGBColorSpace
   texture.anisotropy = 4
   texture.needsUpdate = true
 
+  // Front and back shells both taper to zero height at the silhouette, so the
+  // object is closed and single-sided rendering is enough. USDZ has no
+  // double-sided flag at all, so this also keeps iOS matching the preview.
   const material = new THREE.MeshStandardMaterial({
     map: texture,
     alphaTest: 0.5,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
     roughness: 0.62,
     metalness: 0.02,
   })
@@ -109,6 +116,21 @@ function buildPlate(box) {
   plate.receiveShadow = true
   plate.userData.thickness = thickness
   return plate
+}
+
+function cropToCanvas(cutout, bbox) {
+  const w = bbox.x1 - bbox.x0
+  const h = bbox.y1 - bbox.y0
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const patch = new ImageData(w, h)
+  for (let y = 0; y < h; y++) {
+    const srcRow = (y + bbox.y0) * cutout.width + bbox.x0
+    patch.data.set(cutout.data.subarray(srcRow * 4, (srcRow + w) * 4), y * w * 4)
+  }
+  canvas.getContext('2d').putImageData(patch, 0, 0)
+  return canvas
 }
 
 function alphaBounds(cutout, cut) {
@@ -335,8 +357,8 @@ function buildShellGeometry({ cutout, heightMap, bbox, gridRes, backDepth }) {
       positions[b + 2] = -h * backDepth
 
       const fu = idx * 2
-      uvs[fu] = px / width
-      uvs[fu + 1] = 1 - py / height
+      uvs[fu] = u
+      uvs[fu + 1] = 1 - v
       const bu = (perShell + idx) * 2
       uvs[bu] = uvs[fu]
       uvs[bu + 1] = uvs[fu + 1]
@@ -436,6 +458,20 @@ export function exportGLB(object, meta = {}) {
       },
     )
   })
+}
+
+// iOS opens AR through Quick Look, which reads USDZ and nothing else. three's
+// USDZExporter runs in the browser, so the conversion costs no server: it
+// writes the texture as PNG (alpha survives) and maps alphaTest onto
+// opacityThreshold, which is what carves the dish silhouette on an iPhone.
+export function exportUSDZ(object) {
+  return new USDZExporter()
+    .parseAsync(object, {
+      maxTextureSize: 1024,
+      includeAnchoringProperties: true,
+      ar: { anchoring: { type: 'plane' }, planeAnchoring: { alignment: 'horizontal' } },
+    })
+    .then((buffer) => new Blob([buffer], { type: 'model/vnd.usdz+zip' }))
 }
 
 export function disposeObject(object) {
