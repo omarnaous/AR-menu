@@ -27,16 +27,12 @@ jobs:
 
       - run: npm ci
 
-      # enablement turns Pages on for the repo if it is not already, and
-      # reports the base_path the project site will be served from.
-      - id: pages
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
+      # A project site is served from /<repo>/, so the base path is the repo
+      # name. Taken from the event rather than hardcoded, so a fork or a
+      # separate build-only repo deploys without editing this file.
       - run: npm run build
         env:
-          VITE_BASE: ${{ steps.pages.outputs.base_path }}/
+          VITE_BASE: /${{ github.event.repository.name }}/
 
       # GitHub Pages has no rewrite rules, so the 404 page doubles as the
       # single-page-app entry point for /item/<id> and /menu.
