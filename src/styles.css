@@ -235,3 +235,35 @@ model-viewer { width: 100%; height: min(62vh, 540px); background: linear-gradien
   h1 { font-size: 22px; }
   .row > * { flex: 1 1 100%; }
 }
+
+.orbit { display: grid; gap: 12px; transition: border-color 0.15s, background 0.15s; }
+.orbit.over { border-color: var(--accent); background: var(--accent-soft); }
+
+.slots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+@media (max-width: 560px) { .slots { grid-template-columns: repeat(2, 1fr); } }
+
+.slot { position: relative; }
+.slot > button:first-child {
+  width: 100%;
+  aspect-ratio: 1;
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1.5px dashed var(--line);
+  background: var(--surface-2);
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.slot > button:first-child:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.slot.filled > button:first-child { border-style: solid; border-color: var(--accent); }
+.slot img { width: 100%; height: 100%; object-fit: cover; }
+.slot .glyph { font-size: 20px; font-weight: 600; }
+.slot .clear {
+  position: absolute; inset-block-start: 5px; inset-inline-end: 5px;
+  width: 22px; height: 22px; border-radius: 50%; border: 0; cursor: pointer;
+  background: rgba(11, 13, 18, 0.78); color: var(--text); font-size: 12px; line-height: 1;
+}

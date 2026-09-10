@@ -15,8 +15,8 @@ npm run preview
 
 Drop a photo in and the finished dish comes back. Nothing to tune, no clicks in between.
 
-1. **Photo** — decoded and downscaled to 1024 px for the per-pixel passes.
-2. **Cut-out** — background removal in `src/lib/segment.js`, at its default strength.
+1. **Photos** — one, or up to four taken while walking around the plate. Each is decoded and downscaled to 1024 px for the per-pixel passes.
+2. **Cut-out** — background removal in `src/lib/segment.js`, at its default strength, on every view. A clean silhouette is the cheapest quality win there is with these models.
 3. **Camera angle** — second moments of the cut-out say whether the plate was shot from above or at an angle, which is the one parameter that used to need a human.
 4. **3D dish** — inflation in `src/lib/inflate.js`, or a reconstruction model when one is configured.
 5. **Publish** — GLB and USDZ export, AR viewer, menu entry, QR code.
@@ -29,7 +29,7 @@ The studio can build a dish two ways, chosen on the cut-out step.
 
 **On device** is silhouette inflation, described below. Free, instant, no key, and it has a hard ceiling: it can only puff up what the camera already saw, which on food reads as smooth and plasticky.
 
-**TRELLIS 2 / Hunyuan3D** send the cut-out to a real image-to-3D model and get a reconstructed mesh back. Paste an API key on the cut-out step and pick the engine. The key lives in `localStorage` and goes straight from the browser to the service, so **anyone who can open the page on that device can spend it** — fine for your own testing, not fine once a restaurant is involved. Move it behind your own server first: `BASE_URL` in `src/lib/ai3d.js` is the only line that has to change.
+**TRELLIS 2 / Hunyuan3D** send the cut-outs to a real image-to-3D model and get a reconstructed mesh back. One photo is a guess at the far side of the dish; four views around the plate give it real geometry, and that is the largest quality difference available for twenty seconds of a waiter's time. Providers keep moving multi-view between endpoints and field names, so a rejected multi-view request retries the documented fallback before failing. Paste an API key on the cut-out step and pick the engine. The key lives in `localStorage` and goes straight from the browser to the service, so **anyone who can open the page on that device can spend it** — fine for your own testing, not fine once a restaurant is involved. Move it behind your own server first: `BASE_URL` in `src/lib/ai3d.js` is the only line that has to change.
 
 TRELLIS 2 is MIT licensed and self-hostable on a 16GB NVIDIA GPU, which costs nothing per dish. Through fal it is roughly $0.25 to $0.35 per generation, which is the price of not running a GPU. Reconstruction takes tens of seconds to a few minutes depending on the queue.
 

@@ -12,19 +12,43 @@ const KEY_STORAGE = 'ar-menu:ai-key'
 const POLL_INTERVAL_MS = 1500
 const TIMEOUT_MS = 8 * 60 * 1000
 
+export const MAX_VIEWS = 4
+
 export const ENGINES = {
   trellis2: {
     id: 'trellis2',
     endpoint: 'fal-ai/trellis-2',
+    // TRELLIS 2 gained multi-view conditioning in 2026; the older dedicated
+    // multi endpoint is the documented fallback if it rejects the field.
+    multiEndpoint: 'fal-ai/trellis-2',
+    fallbackMultiEndpoint: 'fal-ai/trellis/multi',
     label: 'TRELLIS 2',
     note: 'Microsoft TRELLIS 2, MIT licensed. Roughly $0.25–$0.35 per dish through fal.',
   },
   hunyuan3d: {
     id: 'hunyuan3d',
     endpoint: 'fal-ai/hunyuan3d/v2',
+    multiEndpoint: 'fal-ai/hunyuan3d/v2/multi-view',
     label: 'Hunyuan3D v2',
     note: 'Tencent Hunyuan3D. Stronger PBR textures, community licence rather than MIT.',
   },
+}
+
+// Hunyuan's multi-view endpoint names its views rather than taking a list.
+const HUNYUAN_VIEW_KEYS = ['front_image_url', 'left_image_url', 'back_image_url', 'right_image_url']
+
+function buildRequest(config, imageUrls) {
+  if (imageUrls.length < 2) {
+    return { endpoint: config.endpoint, body: { image_url: imageUrls[0] } }
+  }
+  if (config.id === 'hunyuan3d') {
+    const body = {}
+    imageUrls.slice(0, HUNYUAN_VIEW_KEYS.length).forEach((url, i) => {
+      body[HUNYUAN_VIEW_KEYS[i]] = url
+    })
+    return { endpoint: config.multiEndpoint, body }
+  }
+  return { endpoint: config.multiEndpoint || config.endpoint, body: { image_urls: imageUrls } }
 }
 
 export function getApiKey() {
@@ -46,23 +70,31 @@ export function setApiKey(value) {
 
 // Returns the GLB as an ArrayBuffer. onProgress reports a stage name so the UI
 // can say what it is waiting on: a queue can take minutes at busy times.
-export async function generateMesh({ blob, engine = 'trellis2', apiKey, onProgress, signal }) {
+export async function generateMesh({ blobs, engine = 'trellis2', apiKey, onProgress, signal }) {
   const config = ENGINES[engine]
   if (!config) throw new Error(`Unknown engine: ${engine}`)
   const key = apiKey || getApiKey()
   if (!key) throw new Error('Add an API key first.')
+  const views = (Array.isArray(blobs) ? blobs : [blobs]).filter(Boolean).slice(0, MAX_VIEWS)
+  if (!views.length) throw new Error('No photo to reconstruct.')
 
   onProgress?.('upload')
-  const imageUrl = await blobToDataUrl(blob)
+  const imageUrls = await Promise.all(views.map(blobToDataUrl))
 
-  const submit = await request(`${BASE_URL}/${config.endpoint}`, {
-    method: 'POST',
-    key,
-    signal,
-    body: JSON.stringify({ image_url: imageUrl }),
-  })
-  const statusUrl = submit.status_url || `${BASE_URL}/${config.endpoint}/requests/${submit.request_id}/status`
-  const responseUrl = submit.response_url || `${BASE_URL}/${config.endpoint}/requests/${submit.request_id}`
+  const plan = buildRequest(config, imageUrls)
+  let submit
+  try {
+    submit = await submitTo(plan.endpoint, plan.body, key, signal)
+  } catch (cause) {
+    // Providers move multi-view between endpoints; try the documented one
+    // before giving up, since a rejected field is not a rejected image.
+    if (imageUrls.length < 2 || !config.fallbackMultiEndpoint) throw cause
+    plan.endpoint = config.fallbackMultiEndpoint
+    submit = await submitTo(plan.endpoint, { image_urls: imageUrls }, key, signal)
+  }
+
+  const statusUrl = submit.status_url || `${BASE_URL}/${plan.endpoint}/requests/${submit.request_id}/status`
+  const responseUrl = submit.response_url || `${BASE_URL}/${plan.endpoint}/requests/${submit.request_id}`
 
   const startedAt = Date.now()
   for (;;) {
@@ -84,6 +116,10 @@ export async function generateMesh({ blob, engine = 'trellis2', apiKey, onProgre
   const response = await fetch(url, { signal })
   if (!response.ok) throw new Error(`Could not download the model (${response.status}).`)
   return response.arrayBuffer()
+}
+
+function submitTo(endpoint, body, key, signal) {
+  return request(`${BASE_URL}/${endpoint}`, { method: 'POST', key, signal, body: JSON.stringify(body) })
 }
 
 async function request(url, { method = 'GET', key, body, signal } = {}) {

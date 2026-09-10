@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import Dropzone from '../components/Dropzone.jsx'
+import OrbitCapture from '../components/OrbitCapture.jsx'
 import CutoutStage from '../components/CutoutStage.jsx'
 import ModelStage from '../components/ModelStage.jsx'
 import ARView from '../components/ARView.jsx'
@@ -8,7 +8,7 @@ import { fileToImage, imageToImageData, applyMask } from '../lib/imaging.js'
 import { segmentFood, alphaCoverage, estimateTilt, DEFAULT_SEGMENT_OPTIONS } from '../lib/segment.js'
 import { buildDishObject, exportGLB, exportUSDZ, disposeObject, DEFAULT_INFLATE_OPTIONS } from '../lib/inflate.js'
 import { initArDelivery, publishUsdz, unpublishUsdz } from '../lib/ar.js'
-import { ENGINES, generateMesh, getApiKey, setApiKey } from '../lib/ai3d.js'
+import { ENGINES, MAX_VIEWS, generateMesh, getApiKey, setApiKey } from '../lib/ai3d.js'
 import { importDishGlb, countTriangles, DEFAULT_IMPORT_OPTIONS } from '../lib/glbImport.js'
 import { imageDataToCanvas, canvasToBlob } from '../lib/imaging.js'
 import { createId, saveItem } from '../lib/storage.js'
@@ -41,6 +41,7 @@ export default function Studio() {
   const [tool, setTool] = useState('rect')
   const [brushSize, setBrushSize] = useState(18)
 
+  const [shots, setShots] = useState(() => Array(MAX_VIEWS).fill(null))
   const [engine, setEngine] = useState('inflate')
   const [apiKey, setKey] = useState(() => getApiKey())
   const [aiBuffer, setAiBuffer] = useState(null)
@@ -67,6 +68,7 @@ export default function Studio() {
     category: 'mains',
   })
 
+  const [notice, setNotice] = useState(null)
   const [status, setStatus] = useState(null)
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -117,20 +119,33 @@ export default function Studio() {
     [t],
   )
 
-  const handleFile = async (file) => {
+  const handleBuild = async () => {
+    const files = shots.filter(Boolean)
+    if (!files.length) return
     setStatus(t('status.reading'))
     setError(null)
     firstSegmentRun.current = true
     try {
-      const image = await fileToImage(file)
-      const imageData = imageToImageData(image)
+      // Every view is cut out before it is sent. A clean silhouette is the
+      // cheapest quality win there is with these models, and the first view
+      // doubles as the one the manual controls edit.
+      const cutouts = []
+      let imageData = null
+      let mask = null
+      for (const file of files) {
+        setStatus(t('status.segmenting'))
+        await nextFrame()
+        const data = imageToImageData(await fileToImage(file))
+        const viewMask = segmentFood(data, DEFAULT_SEGMENT_OPTIONS)
+        cutouts.push(await canvasToBlob(imageDataToCanvas(applyMask(data, viewMask)), 'image/png'))
+        if (!imageData) {
+          imageData = data
+          mask = viewMask
+        }
+      }
       setSource(imageData)
       setRect(null)
       setTool('rect')
-
-      setStatus(t('status.segmenting'))
-      await nextFrame()
-      const mask = segmentFood(imageData, DEFAULT_SEGMENT_OPTIONS)
       setAlpha(mask)
       setAlphaVersion((value) => value + 1)
       setSegment(DEFAULT_SEGMENT_OPTIONS)
@@ -142,9 +157,10 @@ export default function Studio() {
 
       const useAi = engine !== 'inflate' && Boolean(apiKey)
       if (useAi) {
-        await runAi(imageData, mask)
+        await runAi(cutouts)
         return
       }
+      if (cutouts.length > 1) setNotice(t('orbit.ignored'))
 
       setStatus(t('status.inflating'))
       await nextFrame()
@@ -232,15 +248,15 @@ export default function Studio() {
 
   // The reconstruction costs money per call, so the GLB is fetched once and
   // every later tweak re-places that same buffer locally.
-  const runAi = async (imageData = source, mask = alpha) => {
-    if (!imageData || !mask) return
+  const runAi = async (cutouts) => {
+    const blobs = cutouts?.length ? cutouts : null
+    if (!blobs) return
     const controller = new AbortController()
     abortRef.current = controller
     setError(null)
     try {
-      const blob = await canvasToBlob(imageDataToCanvas(applyMask(imageData, mask)), 'image/png')
       const buffer = await generateMesh({
-        blob,
+        blobs,
         engine,
         apiKey,
         signal: controller.signal,
@@ -263,7 +279,8 @@ export default function Studio() {
   // rather than walking the person through the rest of the old wizard again.
   const applyCutout = async () => {
     if (engine !== 'inflate' && apiKey) {
-      await runAi(source, alpha)
+      const blob = await canvasToBlob(imageDataToCanvas(applyMask(source, alpha)), 'image/png')
+      await runAi([blob])
       return
     }
     setStep('publish')
@@ -397,6 +414,8 @@ export default function Studio() {
       return null
     })
     setStats(null)
+    setNotice(null)
+    setShots(Array(MAX_VIEWS).fill(null))
     setAiBuffer(null)
     setAiShape(DEFAULT_IMPORT_OPTIONS)
     setThumb(null)
@@ -427,6 +446,7 @@ export default function Studio() {
       </ol>
 
       {error && <div className="note bad">{error}</div>}
+      {notice && step === 'publish' && <div className="note warn">{notice}</div>}
 
       {step === 'photo' && (
         <div className="grid two">
@@ -438,7 +458,13 @@ export default function Studio() {
               </div>
             </div>
           ) : (
-            <Dropzone onFile={handleFile} />
+            <OrbitCapture
+              shots={shots}
+              onChange={setShots}
+              onBuild={handleBuild}
+              busy={Boolean(status)}
+              maxViews={MAX_VIEWS}
+            />
           )}
           <div className="card">
             <div className="field">
