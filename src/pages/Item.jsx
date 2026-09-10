@@ -78,7 +78,7 @@ export default function Item() {
         </div>
 
         <div className="stack">
-          <QRCard url={`${window.location.origin}/item/${item.id}`} filename={`${item.id}-qr.png`} />
+          <QRCard url={new URL(`item/${item.id}`, new URL(import.meta.env.BASE_URL, window.location.origin)).href} filename={`${item.id}-qr.png`} />
           <div className="card stack">
             <div className="spread tiny muted">
               <span>{t('details.category')}</span>
