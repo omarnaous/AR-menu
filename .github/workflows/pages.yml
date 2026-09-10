@@ -27,6 +27,14 @@ jobs:
 
       - run: npm ci
 
+      # Switches Pages on for the repository if it is not already. It is
+      # allowed to fail: the base path below does not depend on it, so a
+      # repository where Pages must be enabled by hand still builds.
+      - uses: actions/configure-pages@v5
+        continue-on-error: true
+        with:
+          enablement: true
+
       # A project site is served from /<repo>/, so the base path is the repo
       # name. Taken from the event rather than hardcoded, so a fork or a
       # separate build-only repo deploys without editing this file.
