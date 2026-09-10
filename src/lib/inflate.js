@@ -100,7 +100,7 @@ export function buildDishObject(cutout, options = {}) {
   return group
 }
 
-function buildPlate(box) {
+export function buildPlate(box) {
   const size = box.getSize(new THREE.Vector3())
   const radius = Math.max(size.x, size.z) * 0.62
   const thickness = Math.max(0.006, radius * 0.05)

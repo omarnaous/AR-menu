@@ -18,6 +18,18 @@ npm run preview
 3. **3D dish** — inflation in `src/lib/inflate.js`.
 4. **Publish** — GLB and USDZ export, AR viewer, menu entry, QR code.
 
+## Two engines
+
+The studio can build a dish two ways, chosen on the cut-out step.
+
+**On device** is silhouette inflation, described below. Free, instant, no key, and it has a hard ceiling: it can only puff up what the camera already saw, which on food reads as smooth and plasticky.
+
+**TRELLIS 2 / Hunyuan3D** send the cut-out to a real image-to-3D model and get a reconstructed mesh back. Paste an API key on the cut-out step and pick the engine. The key lives in `localStorage` and goes straight from the browser to the service, so **anyone who can open the page on that device can spend it** — fine for your own testing, not fine once a restaurant is involved. Move it behind your own server first: `BASE_URL` in `src/lib/ai3d.js` is the only line that has to change.
+
+TRELLIS 2 is MIT licensed and self-hostable on a 16GB NVIDIA GPU, which costs nothing per dish. Through fal it is roughly $0.25 to $0.35 per generation, which is the price of not running a GPU. Reconstruction takes tens of seconds to a few minutes depending on the queue.
+
+The reconstruction is fetched once and cached in memory, so changing the dish width, its facing or its plate re-places that same mesh locally rather than paying for another call.
+
 ## How a flat photo becomes 3D
 
 Be clear about this, because it decides what the product can promise: **a single photo contains no depth information.** No library, free or paid, recovers the true geometry of a plate of machboos from one JPEG. Photogrammetry needs many angles. Image-to-3D models (TripoSR, Hunyuan3D, Stable Fast 3D) hallucinate a plausible mesh and need a GPU, which means a server and a bill per image.
@@ -72,6 +84,8 @@ Two consequences worth knowing. The dish is single-sided, because USDZ has no do
 ## Known limits, stated plainly
 
 **Dishes live in one browser.** `src/lib/storage.js` is IndexedDB. That means the QR codes only resolve on the device that created the menu — fine for building and demoing, useless for guests. The module is deliberately a thin, swappable interface: point `saveItem`, `listItems`, `getItem` and `getAsset` at Supabase, Firebase or your own API and everything above it is unchanged. Until then, *Export menu* writes a JSON file with the models embedded and *Import menu* reads it back on another device.
+
+**The AI engines are untested against the live service.** The request and response handling, the queue polling, the GLB import and the USDZ export are all verified end to end against a stubbed service, because fal is unreachable from the machine this was built on. The first real call may need the request body adjusted; the service's own error text is surfaced verbatim in the UI for exactly that reason.
 
 **Segmentation and inflation run on the main thread.** A 1024 px photo takes a few hundred milliseconds and the UI freezes for that beat. Moving both into a Web Worker is the obvious next step.
 

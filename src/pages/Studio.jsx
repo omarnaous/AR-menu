@@ -8,6 +8,9 @@ import { fileToImage, imageToImageData, applyMask } from '../lib/imaging.js'
 import { segmentFood, alphaCoverage, DEFAULT_SEGMENT_OPTIONS } from '../lib/segment.js'
 import { buildDishObject, exportGLB, exportUSDZ, disposeObject, DEFAULT_INFLATE_OPTIONS } from '../lib/inflate.js'
 import { initArDelivery, publishUsdz, unpublishUsdz } from '../lib/ar.js'
+import { ENGINES, generateMesh, getApiKey, setApiKey } from '../lib/ai3d.js'
+import { importDishGlb, countTriangles, DEFAULT_IMPORT_OPTIONS } from '../lib/glbImport.js'
+import { imageDataToCanvas, canvasToBlob } from '../lib/imaging.js'
 import { createId, saveItem } from '../lib/storage.js'
 import { useI18n, CURRENCIES } from '../i18n/index.jsx'
 
@@ -35,6 +38,12 @@ export default function Studio() {
   const [rect, setRect] = useState(null)
   const [tool, setTool] = useState('rect')
   const [brushSize, setBrushSize] = useState(18)
+
+  const [engine, setEngine] = useState('inflate')
+  const [apiKey, setKey] = useState(() => getApiKey())
+  const [aiBuffer, setAiBuffer] = useState(null)
+  const [aiShape, setAiShape] = useState(DEFAULT_IMPORT_OPTIONS)
+  const abortRef = useRef(null)
 
   const [shape, setShape] = useState(DEFAULT_INFLATE_OPTIONS)
   const [object, setObject] = useState(null)
@@ -73,6 +82,20 @@ export default function Studio() {
   }, [])
   useEffect(() => () => glbUrl && URL.revokeObjectURL(glbUrl), [glbUrl])
   useEffect(() => () => usdzFileUrl && URL.revokeObjectURL(usdzFileUrl), [usdzFileUrl])
+
+  const invalidateExports = useCallback(() => {
+    setGlb(null)
+    setGlbUrl((previous) => {
+      if (previous) URL.revokeObjectURL(previous)
+      return null
+    })
+    setUsdz(null)
+    setUsdzUrl(null)
+    setUsdzFileUrl((previous) => {
+      if (previous) URL.revokeObjectURL(previous)
+      return null
+    })
+  }, [])
 
   const runSegmentation = useCallback(
     async (imageData, options, boundingRect) => {
@@ -136,17 +159,7 @@ export default function Studio() {
         const next = buildDishObject(masked, options)
         disposeObject(objectRef.current)
         setObject(next)
-        setGlb(null)
-        setGlbUrl((previous) => {
-          if (previous) URL.revokeObjectURL(previous)
-          return null
-        })
-        setUsdz(null)
-        setUsdzUrl(null)
-        setUsdzFileUrl((previous) => {
-          if (previous) URL.revokeObjectURL(previous)
-          return null
-        })
+        invalidateExports()
 
         let triangles = 0
         next.traverse((child) => {
@@ -165,18 +178,80 @@ export default function Studio() {
     [source, alpha, t],
   )
 
+  const buildAiModel = useCallback(
+    async (buffer, options) => {
+      if (!buffer) return
+      setStatus(t('status.assembling'))
+      setError(null)
+      await nextFrame()
+      try {
+        const next = await importDishGlb(buffer, options)
+        disposeObject(objectRef.current)
+        setObject(next)
+        setStats({ triangles: countTriangles(next) })
+        invalidateExports()
+      } catch (cause) {
+        setError(cause.message || t('error.generic'))
+      } finally {
+        setStatus(null)
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t],
+  )
+
+  // The reconstruction costs money per call, so the GLB is fetched once and
+  // every later tweak re-places that same buffer locally.
+  const runAi = async () => {
+    if (!source || !alpha) return
+    const controller = new AbortController()
+    abortRef.current = controller
+    setError(null)
+    setStep('model')
+    try {
+      const blob = await canvasToBlob(imageDataToCanvas(applyMask(source, alpha)), 'image/png')
+      const buffer = await generateMesh({
+        blob,
+        engine,
+        apiKey,
+        signal: controller.signal,
+        onProgress: (stage, position) =>
+          setStatus(position ? `${t(`status.ai.${stage}`)} (${position})` : t(`status.ai.${stage}`)),
+      })
+      setAiBuffer(buffer)
+      await buildAiModel(buffer, aiShape)
+    } catch (cause) {
+      setStatus(null)
+      if (cause.name !== 'AbortError') setError(cause.message || t('error.generic'))
+    } finally {
+      abortRef.current = null
+    }
+  }
+
   const goToModel = async () => {
+    if (engine !== 'inflate') {
+      await runAi()
+      return
+    }
     setStep('model')
     await buildModel(shape)
   }
 
   const shapeSignature = JSON.stringify(shape)
   useEffect(() => {
-    if (step !== 'model' || !object) return
+    if (step !== 'model' || !object || engine !== 'inflate') return
     const timer = setTimeout(() => buildModel(shape), 260)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shapeSignature])
+
+  const aiSignature = JSON.stringify(aiShape)
+  useEffect(() => {
+    if (step !== 'model' || !aiBuffer) return
+    const timer = setTimeout(() => buildAiModel(aiBuffer, aiShape), 260)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiSignature])
 
   // The live preview is unmounted on the publish step, so grab the thumbnail
   // while its WebGL context is still around.
@@ -248,7 +323,8 @@ export default function Studio() {
           price: details.price === '' ? null : Number(details.price),
           currency: details.currency,
           category: details.category,
-          shape,
+          engine,
+          shape: engine === 'inflate' ? shape : aiShape,
           bytes: blob.size,
           triangles: stats?.triangles ?? null,
         },
@@ -279,6 +355,8 @@ export default function Studio() {
       return null
     })
     setStats(null)
+    setAiBuffer(null)
+    setAiShape(DEFAULT_IMPORT_OPTIONS)
     setThumb(null)
     setRect(null)
     setSegment(DEFAULT_SEGMENT_OPTIONS)
@@ -392,12 +470,54 @@ export default function Studio() {
             {coverage < 0.02 && <div className="note bad">{t('cut.warnSmall')}</div>}
             {coverage > 0.9 && <div className="note warn">{t('cut.warnLarge')}</div>}
 
+            <div className="field">
+              <label>{t('engine.label')}</label>
+              <div className="seg">
+                <button aria-pressed={engine === 'inflate'} onClick={() => setEngine('inflate')}>
+                  {t('engine.inflate')}
+                </button>
+                {Object.values(ENGINES).map((option) => (
+                  <button
+                    key={option.id}
+                    aria-pressed={engine === option.id}
+                    onClick={() => setEngine(option.id)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {engine !== 'inflate' && (
+              <>
+                <p className="tiny muted" style={{ margin: 0 }}>{ENGINES[engine].note}</p>
+                <div className="field">
+                  <label>{t('engine.key')}</label>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    autoComplete="off"
+                    placeholder="fal.ai API key"
+                    onChange={(event) => {
+                      setKey(event.target.value)
+                      setApiKey(event.target.value)
+                    }}
+                  />
+                </div>
+                <div className="note warn">{t('engine.keyWarning')}</div>
+              </>
+            )}
+
             <div className="row">
               <button className="btn ghost" onClick={reset}>{t('action.back')}</button>
               <button className="btn" onClick={() => runSegmentation(source, segment, rect)} disabled={Boolean(status)}>
                 {t('cut.recompute')}
               </button>
-              <button className="btn primary" onClick={goToModel} disabled={Boolean(status) || coverage < 0.005}>
+              <button
+                className="btn primary"
+                onClick={goToModel}
+                disabled={Boolean(status) || coverage < 0.005 || (engine !== 'inflate' && !apiKey)}
+              >
                 {t('action.next')}
               </button>
             </div>
@@ -410,6 +530,8 @@ export default function Studio() {
           <ModelStage ref={stageRef} object={object} busy={Boolean(status)} busyLabel={status} />
           <div className="card controls">
             <h2>{t('model.title')}</h2>
+            {engine === 'inflate' && (
+              <>
 
             <div className="field">
               <label>{t('model.tilt')}</label>
@@ -489,6 +611,40 @@ export default function Studio() {
               {t('model.plate')}
             </label>
 
+              </>
+            )}
+
+            {engine !== 'inflate' && (
+              <>
+                <Slider
+                  label={t('model.width')}
+                  min={8}
+                  max={45}
+                  step={1}
+                  value={aiShape.widthCm}
+                  onChange={(value) => setAiShape((a) => ({ ...a, widthCm: value }))}
+                  format={(v) => `${v} cm`}
+                />
+                <Slider
+                  label={t('model.yaw')}
+                  min={0}
+                  max={350}
+                  step={10}
+                  value={aiShape.yawDeg}
+                  onChange={(value) => setAiShape((a) => ({ ...a, yawDeg: value }))}
+                  format={(v) => `${v}°`}
+                />
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={aiShape.plate}
+                    onChange={(event) => setAiShape((a) => ({ ...a, plate: event.target.checked }))}
+                  />
+                  {t('model.plate')}
+                </label>
+                <p className="tiny muted" style={{ margin: 0 }}>{t('model.aiNote')}</p>
+              </>
+            )}
             {stats && (
               <p className="tiny muted" style={{ margin: 0 }}>
                 {stats.triangles.toLocaleString(lang === 'ar' ? 'ar-AE' : 'en-US')} triangles
