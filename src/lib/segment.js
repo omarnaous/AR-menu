@@ -323,3 +323,53 @@ function boxBlur(src, width, height, radius) {
   }
   return out
 }
+
+// Guesses the camera angle from the cut-out so the studio does not have to ask.
+// A round plate photographed from above is a circle; the same plate at
+// three-quarters is an ellipse roughly 0.6 as tall as it is wide. Second
+// moments of the mask give that ratio without assuming the dish is centred.
+export function estimateTilt(alpha, width, height) {
+  let m00 = 0
+  let m10 = 0
+  let m01 = 0
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const w = alpha[y * width + x] / 255
+      if (w < 0.5) continue
+      m00 += w
+      m10 += w * x
+      m01 += w * y
+    }
+  }
+  if (m00 < 32) return 90
+  const cx = m10 / m00
+  const cy = m01 / m00
+
+  let xx = 0
+  let yy = 0
+  let xy = 0
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const w = alpha[y * width + x] / 255
+      if (w < 0.5) continue
+      const dx = x - cx
+      const dy = y - cy
+      xx += w * dx * dx
+      yy += w * dy * dy
+      xy += w * dx * dy
+    }
+  }
+  xx /= m00
+  yy /= m00
+  xy /= m00
+
+  // Eigenvalues of the covariance matrix are the squared semi-axes.
+  const mean = (xx + yy) / 2
+  const diff = Math.sqrt(Math.max(0, ((xx - yy) / 2) ** 2 + xy * xy))
+  const major = Math.sqrt(Math.max(mean + diff, 1e-6))
+  const minor = Math.sqrt(Math.max(mean - diff, 1e-6))
+  const ratio = minor / major
+
+  // A near-circle was shot from above; anything squashed was shot at an angle.
+  return ratio > 0.82 ? 90 : 45
+}

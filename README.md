@@ -13,10 +13,15 @@ npm run preview
 
 ## The pipeline
 
-1. **Photo** — the image is decoded and downscaled to 1024 px for the per-pixel passes.
-2. **Cut-out** — background removal in `src/lib/segment.js`.
-3. **3D dish** — inflation in `src/lib/inflate.js`.
-4. **Publish** — GLB and USDZ export, AR viewer, menu entry, QR code.
+Drop a photo in and the finished dish comes back. Nothing to tune, no clicks in between.
+
+1. **Photo** — decoded and downscaled to 1024 px for the per-pixel passes.
+2. **Cut-out** — background removal in `src/lib/segment.js`, at its default strength.
+3. **Camera angle** — second moments of the cut-out say whether the plate was shot from above or at an angle, which is the one parameter that used to need a human.
+4. **3D dish** — inflation in `src/lib/inflate.js`, or a reconstruction model when one is configured.
+5. **Publish** — GLB and USDZ export, AR viewer, menu entry, QR code.
+
+About four seconds end to end on the built-in engine. The cut-out and shape controls still exist behind *Adjust cut-out* and *Adjust shape* on the finished dish, for the photo the automatic pass gets wrong, and returning from either rebuilds and lands back on the dish.
 
 ## Two engines
 

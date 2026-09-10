@@ -5,7 +5,7 @@ import CutoutStage from '../components/CutoutStage.jsx'
 import ModelStage from '../components/ModelStage.jsx'
 import ARView from '../components/ARView.jsx'
 import { fileToImage, imageToImageData, applyMask } from '../lib/imaging.js'
-import { segmentFood, alphaCoverage, DEFAULT_SEGMENT_OPTIONS } from '../lib/segment.js'
+import { segmentFood, alphaCoverage, estimateTilt, DEFAULT_SEGMENT_OPTIONS } from '../lib/segment.js'
 import { buildDishObject, exportGLB, exportUSDZ, disposeObject, DEFAULT_INFLATE_OPTIONS } from '../lib/inflate.js'
 import { initArDelivery, publishUsdz, unpublishUsdz } from '../lib/ar.js'
 import { ENGINES, generateMesh, getApiKey, setApiKey } from '../lib/ai3d.js'
@@ -14,7 +14,9 @@ import { imageDataToCanvas, canvasToBlob } from '../lib/imaging.js'
 import { createId, saveItem } from '../lib/storage.js'
 import { useI18n, CURRENCIES } from '../i18n/index.jsx'
 
-const STEPS = ['photo', 'cutout', 'model', 'publish']
+// The default path has two steps. Cut-out and shape are still reachable, but
+// only from the finished dish, for the photo the automatic pass got wrong.
+const STEPS = ['photo', 'publish']
 const CATEGORIES = ['starters', 'mains', 'grills', 'desserts', 'drinks']
 const TILTS = [
   { value: 90, key: 'model.tilt.top' },
@@ -118,17 +120,45 @@ export default function Studio() {
   const handleFile = async (file) => {
     setStatus(t('status.reading'))
     setError(null)
+    firstSegmentRun.current = true
     try {
       const image = await fileToImage(file)
       const imageData = imageToImageData(image)
       setSource(imageData)
       setRect(null)
       setTool('rect')
-      setStep('cutout')
-      await runSegmentation(imageData, segment, null)
+
+      setStatus(t('status.segmenting'))
+      await nextFrame()
+      const mask = segmentFood(imageData, DEFAULT_SEGMENT_OPTIONS)
+      setAlpha(mask)
+      setAlphaVersion((value) => value + 1)
+      setSegment(DEFAULT_SEGMENT_OPTIONS)
+
+      // Everything the studio used to ask for is decided here instead.
+      const tiltDeg = estimateTilt(mask, imageData.width, imageData.height)
+      const nextShape = { ...DEFAULT_INFLATE_OPTIONS, tiltDeg }
+      setShape(nextShape)
+
+      const useAi = engine !== 'inflate' && Boolean(apiKey)
+      if (useAi) {
+        await runAi(imageData, mask)
+        return
+      }
+
+      setStatus(t('status.inflating'))
+      await nextFrame()
+      const built = buildDishObject(applyMask(imageData, mask), nextShape)
+      disposeObject(objectRef.current)
+      setObject(built)
+      setStats({ triangles: countTriangles(built) })
+      invalidateExports()
+      setThumb(null)
+      setStep('publish')
     } catch (cause) {
-      setStatus(null)
       setError(cause.message || t('error.generic'))
+    } finally {
+      setStatus(null)
     }
   }
 
@@ -202,14 +232,13 @@ export default function Studio() {
 
   // The reconstruction costs money per call, so the GLB is fetched once and
   // every later tweak re-places that same buffer locally.
-  const runAi = async () => {
-    if (!source || !alpha) return
+  const runAi = async (imageData = source, mask = alpha) => {
+    if (!imageData || !mask) return
     const controller = new AbortController()
     abortRef.current = controller
     setError(null)
-    setStep('model')
     try {
-      const blob = await canvasToBlob(imageDataToCanvas(applyMask(source, alpha)), 'image/png')
+      const blob = await canvasToBlob(imageDataToCanvas(applyMask(imageData, mask)), 'image/png')
       const buffer = await generateMesh({
         blob,
         engine,
@@ -220,12 +249,25 @@ export default function Studio() {
       })
       setAiBuffer(buffer)
       await buildAiModel(buffer, aiShape)
+      setThumb(null)
+      setStep('publish')
     } catch (cause) {
       setStatus(null)
       if (cause.name !== 'AbortError') setError(cause.message || t('error.generic'))
     } finally {
       abortRef.current = null
     }
+  }
+
+  // Coming back from a manual cut-out edit rebuilds and returns to the dish,
+  // rather than walking the person through the rest of the old wizard again.
+  const applyCutout = async () => {
+    if (engine !== 'inflate' && apiKey) {
+      await runAi(source, alpha)
+      return
+    }
+    setStep('publish')
+    await buildModel(shape)
   }
 
   const goToModel = async () => {
@@ -365,7 +407,8 @@ export default function Studio() {
     firstSegmentRun.current = true
   }
 
-  const stepIndex = STEPS.indexOf(step)
+  const stepIndex = step === 'photo' ? 0 : 1
+  const adjusting = step === 'cutout' || step === 'model'
 
   return (
     <div className="stack">
@@ -387,9 +430,54 @@ export default function Studio() {
 
       {step === 'photo' && (
         <div className="grid two">
-          <Dropzone onFile={handleFile} />
+          {status ? (
+            <div className="stage viewport" style={{ position: 'relative' }}>
+              <div className="busy">
+                <div className="spinner" />
+                <span>{status}</span>
+              </div>
+            </div>
+          ) : (
+            <Dropzone onFile={handleFile} />
+          )}
           <div className="card">
-            <h2>{t('upload.tips.title')}</h2>
+            <div className="field">
+              <label>{t('engine.label')}</label>
+              <div className="seg">
+                <button aria-pressed={engine === 'inflate'} onClick={() => setEngine('inflate')}>
+                  {t('engine.inflate')}
+                </button>
+                {Object.values(ENGINES).map((option) => (
+                  <button
+                    key={option.id}
+                    aria-pressed={engine === option.id}
+                    onClick={() => setEngine(option.id)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {engine !== 'inflate' && (
+              <>
+                <p className="tiny muted">{ENGINES[engine].note}</p>
+                <div className="field">
+                  <label>{t('engine.key')}</label>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    autoComplete="off"
+                    placeholder="fal.ai API key"
+                    onChange={(event) => {
+                      setKey(event.target.value)
+                      setApiKey(event.target.value)
+                    }}
+                  />
+                </div>
+                <div className="note warn">{t('engine.keyWarning')}</div>
+              </>
+            )}
+            <h2 style={{ marginTop: 18 }}>{t('upload.tips.title')}</h2>
             <ul className="tips">
               <li>{t('upload.tips.1')}</li>
               <li>{t('upload.tips.2')}</li>
@@ -470,55 +558,19 @@ export default function Studio() {
             {coverage < 0.02 && <div className="note bad">{t('cut.warnSmall')}</div>}
             {coverage > 0.9 && <div className="note warn">{t('cut.warnLarge')}</div>}
 
-            <div className="field">
-              <label>{t('engine.label')}</label>
-              <div className="seg">
-                <button aria-pressed={engine === 'inflate'} onClick={() => setEngine('inflate')}>
-                  {t('engine.inflate')}
-                </button>
-                {Object.values(ENGINES).map((option) => (
-                  <button
-                    key={option.id}
-                    aria-pressed={engine === option.id}
-                    onClick={() => setEngine(option.id)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {engine !== 'inflate' && (
-              <>
-                <p className="tiny muted" style={{ margin: 0 }}>{ENGINES[engine].note}</p>
-                <div className="field">
-                  <label>{t('engine.key')}</label>
-                  <input
-                    type="password"
-                    value={apiKey}
-                    autoComplete="off"
-                    placeholder="fal.ai API key"
-                    onChange={(event) => {
-                      setKey(event.target.value)
-                      setApiKey(event.target.value)
-                    }}
-                  />
-                </div>
-                <div className="note warn">{t('engine.keyWarning')}</div>
-              </>
-            )}
-
             <div className="row">
-              <button className="btn ghost" onClick={reset}>{t('action.back')}</button>
+              <button className="btn ghost" onClick={object ? () => setStep('publish') : reset}>
+                {t('action.back')}
+              </button>
               <button className="btn" onClick={() => runSegmentation(source, segment, rect)} disabled={Boolean(status)}>
                 {t('cut.recompute')}
               </button>
               <button
                 className="btn primary"
-                onClick={goToModel}
-                disabled={Boolean(status) || coverage < 0.005 || (engine !== 'inflate' && !apiKey)}
+                onClick={applyCutout}
+                disabled={Boolean(status) || coverage < 0.005}
               >
-                {t('action.next')}
+                {t('action.apply')}
               </button>
             </div>
           </div>
@@ -652,9 +704,9 @@ export default function Studio() {
             )}
 
             <div className="row">
-              <button className="btn ghost" onClick={() => setStep('cutout')}>{t('action.back')}</button>
+              <button className="btn ghost" onClick={() => setStep('cutout')}>{t('cut.title')}</button>
               <button className="btn primary" onClick={goToPublish} disabled={!object || Boolean(status)}>
-                {t('action.next')}
+                {t('action.apply')}
               </button>
             </div>
           </div>
@@ -734,7 +786,8 @@ export default function Studio() {
             </div>
 
             <div className="row">
-              <button className="btn ghost" onClick={() => setStep('model')}>{t('action.back')}</button>
+              <button className="btn ghost" onClick={() => setStep('cutout')}>{t('action.adjustCutout')}</button>
+              <button className="btn ghost" onClick={() => setStep('model')}>{t('action.adjustShape')}</button>
               {glbUrl && (
                 <a className="btn" href={glbUrl} download={`${slugify(details.name)}.glb`}>
                   {t('action.download')}
