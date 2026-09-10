@@ -89,6 +89,7 @@ const en = {
   'ar.title': 'Augmented reality',
   'ar.hint': 'Point the camera at your table, then drag to place the dish.',
   'ar.ios': 'This dish has no USDZ file, so iPhone and iPad show the 3D viewer instead of camera AR. Serve the page over HTTPS and rebuild the dish to generate one.',
+  'ar.iosDirect': 'Open in AR (iPhone)',
   'ar.unsupported': 'This browser has no AR mode. The dish still rotates and zooms in 3D.',
 
   'menu.title': 'Your AR menu',
@@ -193,6 +194,7 @@ const ar = {
   'ar.title': 'الواقع المعزز',
   'ar.hint': 'وجّه الكاميرا نحو الطاولة ثم اسحب لوضع الطبق.',
   'ar.ios': 'لا يوجد ملف USDZ لهذا الطبق، لذا يعرض الآيفون والآيباد العارض ثلاثي الأبعاد بدل الكاميرا. افتح الصفحة عبر HTTPS وأعد بناء الطبق لإنشاء الملف.',
+  'ar.iosDirect': 'افتح بالواقع المعزز (آيفون)',
   'ar.unsupported': 'هذا المتصفح لا يدعم الواقع المعزز. يمكنك تدوير الطبق وتكبيره ثلاثي الأبعاد.',
 
   'menu.title': 'قائمتك بالواقع المعزز',

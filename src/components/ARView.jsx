@@ -41,7 +41,6 @@ export default function ARView({ src, iosSrc, alt, poster }) {
         ar
         ar-modes="webxr scene-viewer quick-look"
         ar-placement="floor"
-        ar-scale="fixed"
         camera-controls
         touch-action="pan-y"
         shadow-intensity="1"
@@ -56,6 +55,15 @@ export default function ARView({ src, iosSrc, alt, poster }) {
         </button>
       </model-viewer>
       <p className="tiny muted" style={{ margin: 0 }}>{t('ar.hint')}</p>
+      {isIOS() && iosSrc && (
+        // Quick Look is fussy about how it is handed a file. A plain rel="ar"
+        // anchor is the most reliable trigger there is, and if this one fails
+        // too the file itself is the problem, not model-viewer.
+        <a className="btn" rel="ar" href={iosSrc}>
+          <img alt="" width="1" height="1" style={{ display: 'none' }} />
+          {t('ar.iosDirect')}
+        </a>
+      )}
       {isIOS() && !iosSrc && <div className="note warn">{t('ar.ios')}</div>}
     </div>
   )
