@@ -1,21 +1,22 @@
-name: Deploy to GitHub Pages
+name: Publish to GitHub Pages
 
 on:
   push:
     branches: [claude/ar-food-menu-webapp-jqooe2]
   workflow_dispatch:
 
+# Pushing the built site to a branch, rather than deploying through the Pages
+# API: the workflow token on this repository is not permitted to create or
+# deploy a Pages site, so the branch source is the one that works.
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,35 +28,27 @@ jobs:
 
       - run: npm ci
 
-      # Switches Pages on for the repository if it is not already. It is
-      # allowed to fail: the base path below does not depend on it, so a
-      # repository where Pages must be enabled by hand still builds.
-      - uses: actions/configure-pages@v5
-        continue-on-error: true
-        with:
-          enablement: true
-
       # A project site is served from /<repo>/, so the base path is the repo
-      # name. Taken from the event rather than hardcoded, so a fork or a
-      # separate build-only repo deploys without editing this file.
+      # name. Taken from the event rather than hardcoded, so a fork deploys
+      # without editing this file.
       - run: npm run build
         env:
           VITE_BASE: /${{ github.event.repository.name }}/
 
-      # GitHub Pages has no rewrite rules, so the 404 page doubles as the
-      # single-page-app entry point for /item/<id> and /menu.
-      - run: cp dist/index.html dist/404.html
+      # .nojekyll keeps Pages from touching the hashed asset filenames, and
+      # 404.html doubles as the single-page-app entry point since Pages has no
+      # rewrite rules of its own.
+      - name: Prepare the published tree
+        run: |
+          cp dist/index.html dist/404.html
+          touch dist/.nojekyll
 
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Push to gh-pages
+        run: |
+          cd dist
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish ${GITHUB_SHA::7}"
+          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" gh-pages
